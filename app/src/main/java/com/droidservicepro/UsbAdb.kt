@@ -56,7 +56,19 @@ internal fun readUsbDiagnostics(
             val supportedCscs = cscListPaths.asSequence().mapNotNull { path ->
                 runCatching { parseCSCList(adb.shell("cat $path")) }.getOrNull()
             }.firstOrNull { it.isNotEmpty() }.orEmpty()
-            return report.copy(supportedCscs = supportedCscs)
+            if (supportedCscs.isNotEmpty()) {
+                return report.copy(
+                    supportedCscs = supportedCscs,
+                    supportedCscSource = CscListSource.FIRMWARE
+                )
+            }
+            val referenceCodes = MultiCscCatalog.codesFor(report.multiCsc?.code)
+            return if (referenceCodes.isNotEmpty()) {
+                report.copy(
+                    supportedCscs = referenceCodes,
+                    supportedCscSource = CscListSource.PUBLIC_REFERENCE
+                )
+            } else report
         } finally {
             connection.releaseInterface(intf)
         }
@@ -218,6 +230,8 @@ private class UsbAdb(
 }
 
 private val cscListPaths = listOf(
+    "/odm/etc/omc/sales_code_list.dat",
+    "/system/odm/etc/omc/sales_code_list.dat",
     "/prism/etc/sales_code_list.dat",
     "/product/omc/sales_code_list.dat",
     "/optics/configs/carriers/sales_code_list.dat",

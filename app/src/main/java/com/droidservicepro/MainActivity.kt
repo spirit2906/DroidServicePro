@@ -376,12 +376,18 @@ class MainActivity : ComponentActivity() {
                         2 -> {
                             if (current != null) Info(t("Данные подключённого телефона", "Connected phone"), cscSummary)
                             val supported = current?.supportedCscs.orEmpty()
+                            val supportNote = when (current?.supportedCscSource) {
+                                CscListSource.FIRMWARE -> t("Список считан из прошивки через ADB.", "List read from this firmware over ADB.")
+                                CscListSource.PUBLIC_REFERENCE -> t(
+                                    "Справочный список для ${current.multiCsc?.code}; состав может отличаться в этой прошивке.",
+                                    "Public reference list for ${current.multiCsc?.code}; this firmware may differ."
+                                )
+                                else -> t("Multi-CSC не распознан, список недоступен.", "Multi-CSC not recognized; list unavailable.")
+                            }
                             Info(
                                 t("CSC в прошивке", "CSC bundle on device"),
-                                if (supported.isEmpty()) t(
-                                    "Список CSC не прочитан. Подключите телефон через USB ADB и подтвердите RSA.",
-                                    "CSC list not read. Connect over USB ADB and approve RSA."
-                                ) else supported.joinToString(" · ")
+                                if (supported.isEmpty()) supportNote
+                                else supportNote + "\n" + supported.joinToString(" · ")
                             )
                             OutlinedTextField(query, { query = it.take(32) }, Modifier.fillMaxWidth(),
                                 singleLine = true, label = { Text(t("Поиск CSC", "Search CSC")) })
@@ -395,6 +401,8 @@ class MainActivity : ComponentActivity() {
                             val assessment = when {
                                 active?.code == selected -> t("Уже указан как активный CSC.", "Already reported as the active CSC.")
                                 current == null -> t("Подключите телефон и прочитайте свойства через USB ADB.", "Connect the phone and read its properties over USB ADB.")
+                                selected in supported && current.supportedCscSource == CscListSource.FIRMWARE -> t("Код найден в списке этой прошивки.", "Code found in this firmware's list.")
+                                selected in supported && current.supportedCscSource == CscListSource.PUBLIC_REFERENCE -> t("Код есть в справочнике ${current.multiCsc?.code}; наличие именно в этой сборке не проверено.", "Code is in the ${current.multiCsc?.code} reference; this exact build is not verified.")
                                 else -> t("Совместимость с этой прошивкой не подтверждена.", "Compatibility with this firmware is unverified.")
                             }
                             Info(t("Выбранный CSC", "Selected CSC"), "$selectedLabel\n$assessment")
