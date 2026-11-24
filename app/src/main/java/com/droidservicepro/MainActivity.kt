@@ -64,6 +64,8 @@ class MainActivity : ComponentActivity() {
     private var currentDevice: String? = null
     private var pendingProbe = false
     private var modemReport by mutableStateOf<UsbModemReport?>(null)
+    private var pendingCsc: String? = null
+    private var cscChangeReport by mutableStateOf<UsbCscChangeReport?>(null)
 
     private val usbEvents = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -74,7 +76,15 @@ class MainActivity : ComponentActivity() {
             if (request != device.deviceId.toString()) return
             pendingDevice = null
             if (usb.hasPermission(device)) {
-                if (pendingProbe) probeModem(device) else diagnose(device)
+                when {
+                    pendingProbe -> probeModem(device)
+                    pendingCsc != null -> {
+                        val csc = pendingCsc
+                        pendingCsc = null
+                        if (csc != null) applyCsc(device, csc)
+                    }
+                    else -> diagnose(device)
+                }
             } else recordStatus(Status.DENIED)
         }
     }
@@ -126,6 +136,7 @@ class MainActivity : ComponentActivity() {
 
     private fun connect(device: UsbDevice) {
         pendingProbe = false
+        pendingCsc = null
         if (busy || pendingDevice != null) return
         report = null
         currentDevice = device.deviceName
@@ -186,6 +197,42 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun requestCscChange(device: UsbDevice, csc: String) {
+        if (busy || report?.supportedCscs?.contains(csc) != true) return
+        if (usb.hasPermission(device)) {
+            applyCsc(device, csc)
+            return
+        }
+        pendingProbe = false
+        pendingCsc = csc
+        pendingDevice = device.deviceName
+        val intent = Intent(USB_PERMISSION).setPackage(packageName)
+            .setData(android.net.Uri.parse("droidservicepro://usb/${device.deviceId}"))
+        val pending = PendingIntent.getBroadcast(
+            this, device.deviceId, intent,
+            PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
+        )
+        usb.requestPermission(device, pending)
+    }
+
+    private fun applyCsc(device: UsbDevice, csc: String) {
+        if (report?.supportedCscs?.contains(csc) != true) return
+        cscChangeReport = null
+        busy = true
+        lifecycleScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) { changeUsbCsc(usb, device, csc) }
+                if (!isDestroyed && currentDevice == device.deviceName) cscChangeReport = result
+            } catch (_: Exception) {
+                if (!isDestroyed && currentDevice == device.deviceName) {
+                    cscChangeReport = UsbCscChangeReport("CSC operation failed")
+                }
+            } finally {
+                busy = false
+            }
+        }
+    }
+
     private fun diagnose(device: UsbDevice) {
         busy = true
         recordStatus(Status.CONNECTING)
@@ -224,6 +271,7 @@ class MainActivity : ComponentActivity() {
         var page by rememberSaveable { mutableIntStateOf(0) }
         var selected by rememberSaveable { mutableStateOf("EUX") }
         var query by rememberSaveable { mutableStateOf("") }
+        var confirmCscChange by remember { mutableStateOf(false) }
         val pages = listOf(t("Главная", "Home"), t("Телефон", "Device"), "CSC", t("Журнал", "Log"))
         val icons = listOf(Icons.Default.Home, Icons.Default.Phone, Icons.Default.Place, Icons.Default.List)
         val current = report
@@ -238,6 +286,7 @@ class MainActivity : ComponentActivity() {
             val value = reading?.let { "${it.code} [${it.property}]" } ?: unknown
             "$label: $value"
         }
+        val selectedUsbDevice = devices.firstOrNull { it.deviceName == currentDevice }
 
         MaterialTheme(colorScheme = darkColorScheme(primary = Accent, background = Bg, surface = Panel)) {
             Scaffold(
@@ -260,7 +309,7 @@ class MainActivity : ComponentActivity() {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Column(Modifier.weight(1f)) {
                             Text("DroidService Pro", style = MaterialTheme.typography.headlineSmall)
-                            Text("v0.2.3")
+                            Text("v0.2.6")
                         }
                         TextButton(onClick = toggleLanguage) { Text(t("EN", "RU")) }
                     }
@@ -326,6 +375,14 @@ class MainActivity : ComponentActivity() {
                         }
                         2 -> {
                             if (current != null) Info(t("Данные подключённого телефона", "Connected phone"), cscSummary)
+                            val supported = current?.supportedCscs.orEmpty()
+                            Info(
+                                t("CSC в прошивке", "CSC bundle on device"),
+                                if (supported.isEmpty()) t(
+                                    "Список CSC не прочитан. Подключите телефон через USB ADB и подтвердите RSA.",
+                                    "CSC list not read. Connect over USB ADB and approve RSA."
+                                ) else supported.joinToString(" · ")
+                            )
                             OutlinedTextField(query, { query = it.take(32) }, Modifier.fillMaxWidth(),
                                 singleLine = true, label = { Text(t("Поиск CSC", "Search CSC")) })
                             val filtered = cscCodes.filter { it.contains(query.trim(), ignoreCase = true) }
@@ -341,6 +398,16 @@ class MainActivity : ComponentActivity() {
                                 else -> t("Совместимость с этой прошивкой не подтверждена.", "Compatibility with this firmware is unverified.")
                             }
                             Info(t("Выбранный CSC", "Selected CSC"), "$selectedLabel\n$assessment")
+                            Button(
+                                onClick = { confirmCscChange = true },
+                                enabled = !busy && selectedUsbDevice != null && selected in supported && active?.code != selected
+                            ) {
+                                Text(t("Сменить CSC на $selected и перезагрузить", "Change CSC to $selected and reboot"))
+                            }
+                            cscChangeReport?.let { result ->
+                                Info(t("Результат смены CSC", "CSC change result"),
+                                    result.note + (result.response?.let { "\n$it" } ?: ""))
+                            }
                             filtered.chunked(3).forEach { row ->
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     row.forEach { code ->
@@ -352,6 +419,25 @@ class MainActivity : ComponentActivity() {
                         3 -> Info(t("Журнал сессии", "Session log"), log.asReversed().joinToString("\n") { (time, event) ->
                             "${DateFormat.getTimeInstance(DateFormat.MEDIUM).format(time)} · ${label(event)}"
                         }.ifEmpty { t("Событий пока нет.", "No events yet.") })
+                    }
+                    if (confirmCscChange) {
+                        AlertDialog(
+                            onDismissRequest = { confirmCscChange = false },
+                            title = { Text(t("Подтвердите смену CSC", "Confirm CSC change")) },
+                            text = { Text(t(
+                                "Для $selected будет отправлена последовательность Samsung AT-команд и запрошена перезагрузка. Метод неофициальный и не проверен на этой сборке. Возможны сброс настроек или проблемы с сетью и обновлениями. Сначала сделайте резервную копию.",
+                                "Samsung AT commands will set $selected and request a reboot. This unofficial method has not been verified on this firmware. Settings may reset, and network or update behavior may change. Back up your data first."
+                            )) },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    confirmCscChange = false
+                                    selectedUsbDevice?.let { requestCscChange(it, selected) }
+                                }) { Text(t("Продолжить", "Continue")) }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { confirmCscChange = false }) { Text(t("Отмена", "Cancel")) }
+                            }
+                        )
                     }
                 }
             }

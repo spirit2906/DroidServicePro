@@ -17,7 +17,8 @@ internal data class DeviceReport(
     val activeCsc: CscReading?,
     val salesCsc: CscReading?,
     val multiCsc: CscReading?,
-    val cscProperties: Map<String, String?>
+    val cscProperties: Map<String, String?>,
+    val supportedCscs: List<String> = emptyList()
 ) {
     companion object {
         private const val ACTIVE_PATH = "persist.sys.omc_path"

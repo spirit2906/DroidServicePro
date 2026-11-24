@@ -53,7 +53,10 @@ internal fun readUsbDiagnostics(
             adb.connect(authorization)
             val report = DeviceReport.fromProperties(adb.readProperties())
             if (report.model == null && report.android == null) throw AdbException(AdbFailure.SHELL)
-            return report
+            val supportedCscs = cscListPaths.asSequence().mapNotNull { path ->
+                runCatching { parseCSCList(adb.shell("cat $path")) }.getOrNull()
+            }.firstOrNull { it.isNotEmpty() }.orEmpty()
+            return report.copy(supportedCscs = supportedCscs)
         } finally {
             connection.releaseInterface(intf)
         }
@@ -113,10 +116,12 @@ private class UsbAdb(
         }
     }
 
-    fun readProperties(): String {
+    fun readProperties(): String = shell("getprop")
+
+    fun shell(command: String): String {
         deadline = SystemClock.elapsedRealtime() + 15_000
         val localId = 1
-        send(OPEN, localId, 0, "shell:getprop\u0000".toByteArray())
+        send(OPEN, localId, 0, "shell:$command\u0000".toByteArray())
         val opened = receive()
         if (opened.command == CLSE) throw AdbException(AdbFailure.SHELL)
         if (opened.command != OKAY || opened.arg1 != localId || opened.arg0 == 0) invalid()
@@ -211,6 +216,19 @@ private class UsbAdb(
         private const val CLSE = 0x45534c43
     }
 }
+
+private val cscListPaths = listOf(
+    "/prism/etc/sales_code_list.dat",
+    "/product/omc/sales_code_list.dat",
+    "/optics/configs/carriers/sales_code_list.dat",
+    "/system/omc/sales_code_list.dat"
+)
+
+private fun parseCSCList(raw: String): List<String> = raw.lineSequence()
+    .map { it.trim().removePrefix("single/").removePrefix("multi/") }
+    .filter { it.matches(Regex("[A-Z]{3}")) }
+    .distinct()
+    .toList()
 
 private class AdbKey {
     private val entry: KeyStore.PrivateKeyEntry
