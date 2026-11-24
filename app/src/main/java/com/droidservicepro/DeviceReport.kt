@@ -8,6 +8,8 @@ internal val cscCodes = (
 
 internal data class CscReading(val code: String, val property: String)
 
+internal enum class CscListSource { FIRMWARE, PUBLIC_REFERENCE, UNAVAILABLE }
+
 internal data class DeviceReport(
     val model: String?,
     val manufacturer: String?,
@@ -18,7 +20,8 @@ internal data class DeviceReport(
     val salesCsc: CscReading?,
     val multiCsc: CscReading?,
     val cscProperties: Map<String, String?>,
-    val supportedCscs: List<String> = emptyList()
+    val supportedCscs: List<String> = emptyList(),
+    val supportedCscSource: CscListSource = CscListSource.UNAVAILABLE
 ) {
     companion object {
         private const val ACTIVE_PATH = "persist.sys.omc_path"

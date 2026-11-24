@@ -375,16 +375,17 @@ class MainActivity : ComponentActivity() {
                         }
                         2 -> {
                             if (current != null) Info(t("Данные подключённого телефона", "Connected phone"), cscSummary)
-                            val supported = current?.supportedCscs.orEmpty()
-                            val supportNote = when (current?.supportedCscSource) {
+                            val report = current
+                            val supported = report?.supportedCscs.orEmpty()
+                            val supportNote = when (report?.supportedCscSource) {
                                 CscListSource.FIRMWARE -> t("Список считан из прошивки через ADB.", "List read from this firmware over ADB.")
                                 CscListSource.PUBLIC_REFERENCE -> t(
-                                    "Справочный список для ${current.multiCsc?.code}; состав может отличаться в этой прошивке.",
-                                    "Public reference list for ${current.multiCsc?.code}; this firmware may differ."
+                                    "Справочный список для ${report?.multiCsc?.code}; состав может отличаться в этой прошивке.",
+                                    "Public reference list for ${report?.multiCsc?.code}; this firmware may differ."
                                 )
                                 else -> t("Multi-CSC не распознан, список недоступен.", "Multi-CSC not recognized; list unavailable.")
                             }
-                            val supportTitle = if (current?.supportedCscSource == CscListSource.PUBLIC_REFERENCE)
+                            val supportTitle = if (report?.supportedCscSource == CscListSource.PUBLIC_REFERENCE)
                                 t("CSC в мультирегионе (справочно)", "Multi-CSC reference")
                             else t("CSC в прошивке", "CSC bundle on device")
                             Info(
@@ -404,8 +405,8 @@ class MainActivity : ComponentActivity() {
                             val assessment = when {
                                 active?.code == selected -> t("Уже указан как активный CSC.", "Already reported as the active CSC.")
                                 current == null -> t("Подключите телефон и прочитайте свойства через USB ADB.", "Connect the phone and read its properties over USB ADB.")
-                                selected in supported && current.supportedCscSource == CscListSource.FIRMWARE -> t("Код найден в списке этой прошивки.", "Code found in this firmware's list.")
-                                selected in supported && current.supportedCscSource == CscListSource.PUBLIC_REFERENCE -> t("Код есть в справочнике ${current.multiCsc?.code}; наличие именно в этой сборке не проверено.", "Code is in the ${current.multiCsc?.code} reference; this exact build is not verified.")
+                                selected in supported && report?.supportedCscSource == CscListSource.FIRMWARE -> t("Код найден в списке этой прошивки.", "Code found in this firmware's list.")
+                                selected in supported && report?.supportedCscSource == CscListSource.PUBLIC_REFERENCE -> t("Код есть в справочнике ${report?.multiCsc?.code}; наличие именно в этой сборке не проверено.", "Code is in the ${report?.multiCsc?.code} reference; this exact build is not verified.")
                                 else -> t("Совместимость с этой прошивкой не подтверждена.", "Compatibility with this firmware is unverified.")
                             }
                             Info(t("Выбранный CSC", "Selected CSC"), "$selectedLabel\n$assessment")
