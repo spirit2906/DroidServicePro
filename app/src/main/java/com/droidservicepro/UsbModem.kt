@@ -39,15 +39,14 @@ internal fun probeUsbModem(manager: UsbManager, device: UsbDevice): UsbModemRepo
     val connection = manager.openDevice(device)
         ?: return UsbModemReport(interfaceSummary, null, "USB permission or open failed")
     return try {
-        if (controlInterface != null && !connection.claimInterface(controlInterface, false)) {
-            return UsbModemReport(interfaceSummary, null, "CDC control interface claim failed")
-        }
         if (!connection.claimInterface(dataInterface, false)) {
-            if (controlInterface != null) connection.releaseInterface(controlInterface)
             return UsbModemReport(interfaceSummary, null, "CDC data interface claim failed")
         }
         try {
             if (controlInterface != null) {
+                // CDC ACM control requests are device control transfers addressed to
+                // the interface. Claiming the interrupt/control interface itself can
+                // fail on Android even when the bulk data interface is available.
                 setLineCoding(connection, controlInterface, 115200)
                 setControlLines(connection, controlInterface, true)
             }
@@ -65,7 +64,6 @@ internal fun probeUsbModem(manager: UsbManager, device: UsbDevice): UsbModemRepo
             )
         } finally {
             connection.releaseInterface(dataInterface)
-            if (controlInterface != null) connection.releaseInterface(controlInterface)
         }
     } catch (error: Exception) {
         UsbModemReport(interfaceSummary, null, "USB modem error: ${error.javaClass.simpleName}")
