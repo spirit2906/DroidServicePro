@@ -39,7 +39,10 @@ internal fun probeUsbModem(manager: UsbManager, device: UsbDevice): UsbModemRepo
     val connection = manager.openDevice(device)
         ?: return UsbModemReport(interfaceSummary, null, "USB permission or open failed")
     return try {
-        if (!connection.claimInterface(dataInterface, false)) {
+        // Android may have already bound the CDC data interface to a system driver.
+        // Force only this interface; the USB connection is closed immediately after
+        // the probe, which lets the host stack re-enumerate it normally.
+        if (!connection.claimInterface(dataInterface, true)) {
             return UsbModemReport(interfaceSummary, null, "CDC data interface claim failed")
         }
         try {
