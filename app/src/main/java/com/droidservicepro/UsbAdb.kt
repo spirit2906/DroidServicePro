@@ -128,7 +128,33 @@ private class UsbAdb(
         }
     }
 
-    fun readProperties(): String = shell("getprop")
+    fun readProperties(): String {
+        val dump = shell("getprop")
+        // Samsung builds sometimes omit persistent CSC properties from the full
+        // getprop dump even though getprop <key> can still read them. Query the
+        // CSC keys directly as a second pass; only append non-empty direct reads
+        // so an empty result cannot overwrite a value present in the dump.
+        val propertyNames = listOf(
+            "persist.sys.omc_path",
+            "persist.sys.omc_etcpath",
+            "persist.sys.omcnw_path",
+            "persist.sys.omcnw_path2",
+            "ro.csc.sales_code",
+            "ril.sales_code",
+            "ro.boot.sales_code",
+            "ril.official_cscver",
+            "ro.csc.omc_code",
+            "ro.boot.omc_code"
+        )
+        val queried = runCatching {
+            shell(propertyNames.joinToString("\n") { "getprop $it" }).lineSequence().toList()
+        }.getOrNull()
+        val direct = propertyNames.mapIndexedNotNull { index, name ->
+            queried?.getOrNull(index)?.trim()?.takeIf { it.isNotEmpty() }
+                ?.let { "[$name]: [$it]" }
+        }
+        return if (direct.isEmpty()) dump else dump + "\n" + direct.joinToString("\n")
+    }
 
     fun shell(command: String): String {
         deadline = SystemClock.elapsedRealtime() + 15_000
