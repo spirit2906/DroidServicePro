@@ -3,6 +3,9 @@ name: DroidService Pro APK
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - usb-modem-probe-v0.2.3
 
 jobs:
   build:
