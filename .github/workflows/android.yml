@@ -1,34 +1,35 @@
-name: Build DroidService Pro APK
 
-on:
-workflow_dispatch:
+Name: DroidService Pro APK
 
-jobs:
-build:
-runs-on: ubuntu-latest
-steps:
-- name: Checkout
-uses: actions/checkout@v4
+On:
+  Workflow_dispatch:
 
-- name: Java 17
-uses: actions/setup-java@v4
-with:
-distribution: temurin
-java-version: '17'
+Jobs:
+  Build:
+    Runs-on: ubuntu-latest
+    Steps:
+      - name: Checkout
+        Uses: actions/checkout@v4
 
-- name: Gradle
-uses: gradle/actions/setup-gradle@v4
-with:
-gradle-version: '8.9'
+      - name: Install Java
+        Uses: actions/setup-java@v4
+        With:
+          Distribution: temurin
+          Java-version: '17'
 
-- name: Android SDK
-uses: android-actions/setup-android@v3
+      - name: Install Gradle
+        Uses: gradle/actions/setup-gradle@v4
+        With:
+          Gradle-version: '8.9'
 
-- name: Build APK
-run: gradle --no-daemon assembleDebug
+      - name: Install Android SDK
+        Uses: android-actions/setup-android@v3
 
-- name: Upload APK
-uses: actions/upload-artifact@v4
-with:
-name: DroidServicePro-debug
-path: app/build/outputs/apk/debug/app-debug.apk
+      - name: Build APK
+        Run: gradle –no-daemon assembleDebug
+
+      - name: Upload APK
+        Uses: actions/upload-artifact@v4
+        With:
+          Name: DroidServicePro
+          Path: app/build/outputs/apk/debug/app-debug.apk
