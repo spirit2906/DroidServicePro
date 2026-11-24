@@ -62,6 +62,8 @@ class MainActivity : ComponentActivity() {
     private val log = mutableStateListOf<Pair<Date, Status>>()
     private var pendingDevice: String? = null
     private var currentDevice: String? = null
+    private var pendingProbe = false
+    private var modemReport by mutableStateOf<UsbModemReport?>(null)
 
     private val usbEvents = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -71,7 +73,9 @@ class MainActivity : ComponentActivity() {
             val request = intent.data?.lastPathSegment
             if (request != device.deviceId.toString()) return
             pendingDevice = null
-            if (usb.hasPermission(device)) diagnose(device) else recordStatus(Status.DENIED)
+            if (usb.hasPermission(device)) {
+                if (pendingProbe) probeModem(device) else diagnose(device)
+            } else recordStatus(Status.DENIED)
         }
     }
 
@@ -121,6 +125,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun connect(device: UsbDevice) {
+        pendingProbe = false
         if (busy || pendingDevice != null) return
         report = null
         currentDevice = device.deviceName
@@ -138,6 +143,46 @@ class MainActivity : ComponentActivity() {
         } catch (_: RuntimeException) {
             pendingDevice = null
             recordStatus(Status.ERROR)
+        }
+    }
+
+    private fun requestModemProbe(device: UsbDevice) {
+        pendingProbe = true
+        currentDevice = device.deviceName
+        if (usb.hasPermission(device)) {
+            probeModem(device)
+            return
+        }
+        pendingDevice = device.deviceName
+        try {
+            val intent = Intent(USB_PERMISSION).setPackage(packageName)
+                .setData(android.net.Uri.parse("droidservicepro://usb/${device.deviceId}"))
+            val pending = PendingIntent.getBroadcast(
+                this, device.deviceId, intent,
+                PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
+            )
+            usb.requestPermission(device, pending)
+        } catch (_: RuntimeException) {
+            pendingProbe = false
+            modemReport = UsbModemReport("", null, "USB permission request failed")
+        }
+    }
+
+    private fun probeModem(device: UsbDevice) {
+        pendingProbe = false
+        modemReport = null
+        busy = true
+        lifecycleScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) { probeUsbModem(usb, device) }
+                if (!isDestroyed && currentDevice == device.deviceName) modemReport = result
+            } catch (_: Exception) {
+                if (!isDestroyed && currentDevice == device.deviceName) {
+                    modemReport = UsbModemReport("", null, "USB modem probe failed")
+                }
+            } finally {
+                busy = false
+            }
         }
     }
 
@@ -215,7 +260,7 @@ class MainActivity : ComponentActivity() {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Column(Modifier.weight(1f)) {
                             Text("DroidService Pro", style = MaterialTheme.typography.headlineSmall)
-                            Text("v0.2.2")
+                            Text("v0.2.3")
                         }
                         TextButton(onClick = toggleLanguage) { Text(t("EN", "RU")) }
                     }
@@ -233,6 +278,14 @@ class MainActivity : ComponentActivity() {
                             devices.forEach { device ->
                                 val adb = adbInterface(device) != null
                                 val ids = "VID %04X · PID %04X".format(device.vendorId, device.productId)
+                                OutlinedButton(onClick = { requestModemProbe(device) }, enabled = !busy) {
+                                    Text(t("Проверить USB-модем", "Probe USB modem") + " · $ids")
+                                }
+                                if (modemReport != null && currentDevice == device.deviceName) {
+                                    val details = modemReport?.response?.let { "\nОтвет: $it" } ?: ""
+                                    Info(t("Проверка AT-модема", "AT modem probe"),
+                                        "${modemReport?.note}$details\n\n${modemReport?.interfaces}")
+                                }
                                 if (adb) {
                                     Button(onClick = { connect(device) }, enabled = !busy && status != Status.PERMISSION) {
                                         Text(t("Читать через ADB", "Read over ADB") + " · $ids · #${device.deviceId}")
