@@ -384,8 +384,11 @@ class MainActivity : ComponentActivity() {
                                 )
                                 else -> t("Multi-CSC не распознан, список недоступен.", "Multi-CSC not recognized; list unavailable.")
                             }
+                            val supportTitle = if (current?.supportedCscSource == CscListSource.PUBLIC_REFERENCE)
+                                t("CSC в мультирегионе (справочно)", "Multi-CSC reference")
+                            else t("CSC в прошивке", "CSC bundle on device")
                             Info(
-                                t("CSC в прошивке", "CSC bundle on device"),
+                                supportTitle,
                                 if (supported.isEmpty()) supportNote
                                 else supportNote + "\n" + supported.joinToString(" · ")
                             )
