@@ -61,11 +61,18 @@ internal fun probeUsbModem(manager: UsbManager, device: UsbDevice): UsbModemRepo
             if (connection.bulkTransfer(output, command, command.size, 1500) != command.size) {
                 return UsbModemReport(interfaceSummary, null, "AT write failed")
             }
-            val response = readResponse(connection, input)
+            val atResponse = readResponse(connection, input)
+            if (!atResponse.contains("OK", ignoreCase = true)) {
+                return UsbModemReport(interfaceSummary, atResponse, "No AT OK response")
+            }
+            val infoResponse = runCatching { sendAt(connection, output, input, "AT+DEVCONINFO") }.getOrNull()
+            val response = infoResponse?.let(::redactDeviceIdentifiers) ?: atResponse
             UsbModemReport(
                 interfaceSummary,
                 response,
-                if (response.contains("OK", ignoreCase = true)) "AT modem responds" else "No AT OK response"
+                if (infoResponse?.contains("+DEVCONINFO", ignoreCase = true) == true)
+                    "AT responds; MTP device information read (sensitive identifiers hidden)"
+                else "AT modem responds; MTP device information unavailable"
             )
         } finally {
             connection.releaseInterface(dataInterface)
@@ -76,6 +83,11 @@ internal fun probeUsbModem(manager: UsbManager, device: UsbDevice): UsbModemRepo
         connection.close()
     }
 }
+
+private fun redactDeviceIdentifiers(response: String): String = response.replace(
+    Regex("(?i)\\b(IMEI2?|SN|UN|PN)\\([^)]*\\)"),
+    "\$1([hidden])"
+)
 
 internal fun changeUsbCsc(manager: UsbManager, device: UsbDevice, csc: String): UsbCscChangeReport {
     if (!csc.matches(Regex("[A-Z]{3}"))) return UsbCscChangeReport("Invalid CSC code")
