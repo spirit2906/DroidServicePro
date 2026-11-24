@@ -36,7 +36,7 @@ internal data class DeviceReport(
         )
         private val propertyLine = Regex("""^\[([^]]+)]\s*:\s*\[(.*)]$""")
         private val cscCode = Regex("[A-Z0-9]{3}")
-        private val omcPath = Regex("""/(?:omc|carriers)/([A-Z0-9]{3})(?:/|$)""")
+        private val omcPath = Regex("""/(?:omc/|carriers/(?:single/)?)([A-Z0-9]{3})(?:/|$)""")
 
         fun fromProperties(output: String): DeviceReport {
             val properties = output.lineSequence().mapNotNull {

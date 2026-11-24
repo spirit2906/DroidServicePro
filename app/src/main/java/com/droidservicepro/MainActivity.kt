@@ -215,7 +215,7 @@ class MainActivity : ComponentActivity() {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Column(Modifier.weight(1f)) {
                             Text("DroidService Pro", style = MaterialTheme.typography.headlineSmall)
-                            Text("v0.2.1")
+                            Text("v0.2.2")
                         }
                         TextButton(onClick = toggleLanguage) { Text(t("EN", "RU")) }
                     }
