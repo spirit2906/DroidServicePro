@@ -21,6 +21,7 @@ android {
     packaging {
         resources {
             excludes += "META-INF/versions/**"
+            pickFirsts += "META-INF/LICENSE.md"
         }
     }
     compileOptions {
