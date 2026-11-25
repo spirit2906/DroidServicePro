@@ -13,16 +13,26 @@ android {
         applicationId = "com.droidservicepro"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.2.2"
+        versionCode = 10
+        versionName = "0.2.8"
     }
 
     buildFeatures { compose = true }
+    packaging {
+        resources {
+            excludes += "META-INF/versions/**"
+            pickFirsts += "META-INF/LICENSE.md"
+        }
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        }
+    }
 }
 
 dependencies {
@@ -33,6 +43,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-core")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+    implementation("com.github.rhythmcache:adb-kt:1.0.13")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
 

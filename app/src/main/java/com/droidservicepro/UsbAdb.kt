@@ -53,7 +53,22 @@ internal fun readUsbDiagnostics(
             adb.connect(authorization)
             val report = DeviceReport.fromProperties(adb.readProperties())
             if (report.model == null && report.android == null) throw AdbException(AdbFailure.SHELL)
-            return report
+            val supportedCscs = cscListPaths.asSequence().mapNotNull { path ->
+                runCatching { parseCSCList(adb.shell("cat $path")) }.getOrNull()
+            }.firstOrNull { it.isNotEmpty() }.orEmpty()
+            if (supportedCscs.isNotEmpty()) {
+                return report.copy(
+                    supportedCscs = supportedCscs,
+                    supportedCscSource = CscListSource.FIRMWARE
+                )
+            }
+            val referenceCodes = MultiCscCatalog.codesFor(report.multiCsc?.code)
+            return if (referenceCodes.isNotEmpty()) {
+                report.copy(
+                    supportedCscs = referenceCodes,
+                    supportedCscSource = CscListSource.PUBLIC_REFERENCE
+                )
+            } else report
         } finally {
             connection.releaseInterface(intf)
         }
@@ -114,9 +129,37 @@ private class UsbAdb(
     }
 
     fun readProperties(): String {
+        val dump = shell("getprop")
+        // Samsung builds sometimes omit persistent CSC properties from the full
+        // getprop dump even though getprop <key> can still read them. Query the
+        // CSC keys directly as a second pass; only append non-empty direct reads
+        // so an empty result cannot overwrite a value present in the dump.
+        val propertyNames = listOf(
+            "persist.sys.omc_path",
+            "persist.sys.omc_etcpath",
+            "persist.sys.omcnw_path",
+            "persist.sys.omcnw_path2",
+            "ro.csc.sales_code",
+            "ril.sales_code",
+            "ro.boot.sales_code",
+            "ril.official_cscver",
+            "ro.csc.omc_code",
+            "ro.boot.omc_code"
+        )
+        val queried = runCatching {
+            shell(propertyNames.joinToString("\n") { "getprop $it" }).lineSequence().toList()
+        }.getOrNull()
+        val direct = propertyNames.mapIndexedNotNull { index, name ->
+            queried?.getOrNull(index)?.trim()?.takeIf { it.isNotEmpty() }
+                ?.let { "[$name]: [$it]" }
+        }
+        return if (direct.isEmpty()) dump else dump + "\n" + direct.joinToString("\n")
+    }
+
+    fun shell(command: String): String {
         deadline = SystemClock.elapsedRealtime() + 15_000
         val localId = 1
-        send(OPEN, localId, 0, "shell:getprop\u0000".toByteArray())
+        send(OPEN, localId, 0, "shell:$command\u0000".toByteArray())
         val opened = receive()
         if (opened.command == CLSE) throw AdbException(AdbFailure.SHELL)
         if (opened.command != OKAY || opened.arg1 != localId || opened.arg0 == 0) invalid()
@@ -211,6 +254,21 @@ private class UsbAdb(
         private const val CLSE = 0x45534c43
     }
 }
+
+private val cscListPaths = listOf(
+    "/odm/etc/omc/sales_code_list.dat",
+    "/system/odm/etc/omc/sales_code_list.dat",
+    "/prism/etc/sales_code_list.dat",
+    "/product/omc/sales_code_list.dat",
+    "/optics/configs/carriers/sales_code_list.dat",
+    "/system/omc/sales_code_list.dat"
+)
+
+private fun parseCSCList(raw: String): List<String> = raw.lineSequence()
+    .map { it.trim().removePrefix("single/").removePrefix("multi/") }
+    .filter { it.matches(Regex("[A-Z]{3}")) }
+    .distinct()
+    .toList()
 
 private class AdbKey {
     private val entry: KeyStore.PrivateKeyEntry

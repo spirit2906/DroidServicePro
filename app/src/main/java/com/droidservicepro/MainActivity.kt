@@ -35,6 +35,8 @@ private val Panel = Color(0xFF151E2B)
 private val Accent = Color(0xFF55A7FF)
 private const val USB_PERMISSION = "com.droidservicepro.USB_PERMISSION"
 
+private enum class WifiAdbState { IDLE, CONNECTING, CONNECTED, ERROR }
+
 private enum class Status(val ru: String, val en: String) {
     READY("Подключите телефон с включённой отладкой по USB.", "Connect a phone with USB debugging enabled."),
     PERMISSION("Разрешите приложению доступ к USB на телефоне-хосте.", "Allow USB access on the host phone."),
@@ -62,6 +64,13 @@ class MainActivity : ComponentActivity() {
     private val log = mutableStateListOf<Pair<Date, Status>>()
     private var pendingDevice: String? = null
     private var currentDevice: String? = null
+    private var pendingProbe = false
+    private var modemReport by mutableStateOf<UsbModemReport?>(null)
+    private var pendingCsc: String? = null
+    private var cscChangeReport by mutableStateOf<UsbCscChangeReport?>(null)
+    private var reportIsWifi by mutableStateOf(false)
+    private var wifiStatus by mutableStateOf(WifiAdbState.IDLE)
+    private var wifiError by mutableStateOf<String?>(null)
 
     private val usbEvents = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -71,7 +80,17 @@ class MainActivity : ComponentActivity() {
             val request = intent.data?.lastPathSegment
             if (request != device.deviceId.toString()) return
             pendingDevice = null
-            if (usb.hasPermission(device)) diagnose(device) else recordStatus(Status.DENIED)
+            if (usb.hasPermission(device)) {
+                when {
+                    pendingProbe -> probeModem(device)
+                    pendingCsc != null -> {
+                        val csc = pendingCsc
+                        pendingCsc = null
+                        if (csc != null) applyCsc(device, csc)
+                    }
+                    else -> diagnose(device)
+                }
+            } else recordStatus(Status.DENIED)
         }
     }
 
@@ -116,13 +135,17 @@ class MainActivity : ComponentActivity() {
             currentDevice = null
             pendingDevice = null
             report = null
+            reportIsWifi = false
             recordStatus(Status.DETACHED)
         }
     }
 
     private fun connect(device: UsbDevice) {
+        pendingProbe = false
+        pendingCsc = null
         if (busy || pendingDevice != null) return
         report = null
+        reportIsWifi = false
         currentDevice = device.deviceName
         if (usb.hasPermission(device)) {
             diagnose(device)
@@ -141,7 +164,84 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun requestModemProbe(device: UsbDevice) {
+        pendingProbe = true
+        currentDevice = device.deviceName
+        if (usb.hasPermission(device)) {
+            probeModem(device)
+            return
+        }
+        pendingDevice = device.deviceName
+        try {
+            val intent = Intent(USB_PERMISSION).setPackage(packageName)
+                .setData(android.net.Uri.parse("droidservicepro://usb/${device.deviceId}"))
+            val pending = PendingIntent.getBroadcast(
+                this, device.deviceId, intent,
+                PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
+            )
+            usb.requestPermission(device, pending)
+        } catch (_: RuntimeException) {
+            pendingProbe = false
+            modemReport = UsbModemReport("", null, "USB permission request failed")
+        }
+    }
+
+    private fun probeModem(device: UsbDevice) {
+        pendingProbe = false
+        modemReport = null
+        busy = true
+        lifecycleScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) { probeUsbModem(usb, device) }
+                if (!isDestroyed && currentDevice == device.deviceName) modemReport = result
+            } catch (_: Exception) {
+                if (!isDestroyed && currentDevice == device.deviceName) {
+                    modemReport = UsbModemReport("", null, "USB modem probe failed")
+                }
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    private fun requestCscChange(device: UsbDevice, csc: String) {
+        if (busy || report?.supportedCscs?.contains(csc) != true) return
+        if (usb.hasPermission(device)) {
+            applyCsc(device, csc)
+            return
+        }
+        pendingProbe = false
+        pendingCsc = csc
+        pendingDevice = device.deviceName
+        val intent = Intent(USB_PERMISSION).setPackage(packageName)
+            .setData(android.net.Uri.parse("droidservicepro://usb/${device.deviceId}"))
+        val pending = PendingIntent.getBroadcast(
+            this, device.deviceId, intent,
+            PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
+        )
+        usb.requestPermission(device, pending)
+    }
+
+    private fun applyCsc(device: UsbDevice, csc: String) {
+        if (report?.supportedCscs?.contains(csc) != true) return
+        cscChangeReport = null
+        busy = true
+        lifecycleScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) { changeUsbCsc(usb, device, csc) }
+                if (!isDestroyed && currentDevice == device.deviceName) cscChangeReport = result
+            } catch (_: Exception) {
+                if (!isDestroyed && currentDevice == device.deviceName) {
+                    cscChangeReport = UsbCscChangeReport("CSC operation failed")
+                }
+            } finally {
+                busy = false
+            }
+        }
+    }
+
     private fun diagnose(device: UsbDevice) {
+        reportIsWifi = false
         busy = true
         recordStatus(Status.CONNECTING)
         lifecycleScope.launch {
@@ -172,6 +272,41 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun connectWifi(host: String, pairingPortText: String, code: String, connectPortText: String) {
+        if (busy) return
+        val pairingPort = pairingPortText.toIntOrNull()
+        val connectPort = connectPortText.toIntOrNull()
+        if (pairingPort == null || connectPort == null) {
+            wifiStatus = WifiAdbState.ERROR
+            wifiError = "Enter both ports shown by Wireless debugging."
+            return
+        }
+        busy = true
+        wifiStatus = WifiAdbState.CONNECTING
+        wifiError = null
+        lifecycleScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    readWifiDiagnostics(applicationContext, host.trim(), pairingPort, code.trim(), connectPort)
+                }
+                if (!isDestroyed) {
+                    report = result
+                    reportIsWifi = true
+                    currentDevice = null
+                    wifiStatus = WifiAdbState.CONNECTED
+                    cscChangeReport = null
+                }
+            } catch (error: Exception) {
+                if (!isDestroyed) {
+                    wifiStatus = WifiAdbState.ERROR
+                    wifiError = error.message?.take(180)
+                }
+            } finally {
+                busy = false
+            }
+        }
+    }
+
     @Composable
     private fun App(ru: Boolean, toggleLanguage: () -> Unit) {
         fun t(a: String, b: String) = if (ru) a else b
@@ -179,6 +314,11 @@ class MainActivity : ComponentActivity() {
         var page by rememberSaveable { mutableIntStateOf(0) }
         var selected by rememberSaveable { mutableStateOf("EUX") }
         var query by rememberSaveable { mutableStateOf("") }
+        var wifiHost by rememberSaveable { mutableStateOf("") }
+        var wifiPairPort by rememberSaveable { mutableStateOf("") }
+        var wifiPairCode by remember { mutableStateOf("") }
+        var wifiConnectPort by rememberSaveable { mutableStateOf("") }
+        var confirmCscChange by remember { mutableStateOf(false) }
         val pages = listOf(t("Главная", "Home"), t("Телефон", "Device"), "CSC", t("Журнал", "Log"))
         val icons = listOf(Icons.Default.Home, Icons.Default.Phone, Icons.Default.Place, Icons.Default.List)
         val current = report
@@ -193,6 +333,7 @@ class MainActivity : ComponentActivity() {
             val value = reading?.let { "${it.code} [${it.property}]" } ?: unknown
             "$label: $value"
         }
+        val selectedUsbDevice = devices.firstOrNull { it.deviceName == currentDevice }
 
         MaterialTheme(colorScheme = darkColorScheme(primary = Accent, background = Bg, surface = Panel)) {
             Scaffold(
@@ -215,7 +356,7 @@ class MainActivity : ComponentActivity() {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Column(Modifier.weight(1f)) {
                             Text("DroidService Pro", style = MaterialTheme.typography.headlineSmall)
-                            Text("v0.2.2")
+                            Text("v0.2.8")
                         }
                         TextButton(onClick = toggleLanguage) { Text(t("EN", "RU")) }
                     }
@@ -233,6 +374,14 @@ class MainActivity : ComponentActivity() {
                             devices.forEach { device ->
                                 val adb = adbInterface(device) != null
                                 val ids = "VID %04X · PID %04X".format(device.vendorId, device.productId)
+                                OutlinedButton(onClick = { requestModemProbe(device) }, enabled = !busy) {
+                                    Text(t("Проверить USB-модем", "Probe USB modem") + " · $ids")
+                                }
+                                if (modemReport != null && currentDevice == device.deviceName) {
+                                    val details = modemReport?.response?.let { "\nОтвет: $it" } ?: ""
+                                    Info(t("Проверка AT-модема", "AT modem probe"),
+                                        "${modemReport?.note}$details\n\n${modemReport?.interfaces}")
+                                }
                                 if (adb) {
                                     Button(onClick = { connect(device) }, enabled = !busy && status != Status.PERMISSION) {
                                         Text(t("Читать через ADB", "Read over ADB") + " · $ids · #${device.deviceId}")
@@ -249,6 +398,7 @@ class MainActivity : ComponentActivity() {
                                     t("Сборка", "Build") to current.build,
                                     t("Модем", "Baseband") to current.baseband
                                 ).joinToString("\n") { (key, value) -> "$key: ${value ?: unknown}" })
+                                if (reportIsWifi) Info("Wi-Fi ADB", t("Данные прочитаны по беспроводной отладке.", "Data read over Wireless debugging."))
                                 Info("CSC", cscSummary)
                                 OutlinedButton(onClick = { showCscProperties = !showCscProperties }) {
                                     Text(if (showCscProperties) t("Скрыть свойства CSC", "Hide CSC properties")
@@ -267,12 +417,56 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             Info("Wi-Fi ADB", t(
-                                "На телефоне включите «Беспроводная отладка» → «Сопряжение устройства с помощью кода». На компьютере в той же сети выполните adb pair IP:порт_сопряжения и введите код с телефона.\n\nПри необходимости выполните adb connect IP:порт_отладки. Диагностика в приложении доступна по USB.",
-                                "On the target, open Wireless debugging → Pair device with pairing code. On a computer on the same network, run adb pair IP:pairing_port and enter the code shown on the phone.\n\nIf needed, run adb connect IP:debugging_port. This app runs diagnostics over USB."
+                                "На подключаемом телефоне Samsung включите «Беспроводная отладка» и оставьте оба телефона в одной Wi-Fi сети. Откройте «Сопряжение устройства с помощью кода»: введите IP, порт сопряжения и код. Порт подключения возьмите с основного экрана «Беспроводная отладка». После сопряжения приложение читает свойства и CSC через защищённый ADB.",
+                                "On the Samsung phone you want to connect, enable Wireless debugging and keep both phones on the same Wi-Fi network. Open Pair device with pairing code and enter its IP, pairing port, and code. Get the connect port from the main Wireless debugging screen. After pairing, the app reads properties and CSC over secure ADB."
                             ))
+                            OutlinedTextField(wifiHost, { wifiHost = it.take(80) }, Modifier.fillMaxWidth(),
+                                singleLine = true, label = { Text(t("IP телефона Samsung", "Samsung phone IP address")) })
+                            OutlinedTextField(wifiPairPort, { wifiPairPort = it.filter(Char::isDigit).take(5) }, Modifier.fillMaxWidth(),
+                                singleLine = true, label = { Text(t("Порт сопряжения", "Pairing port")) })
+                            OutlinedTextField(wifiPairCode, { wifiPairCode = it.filter(Char::isDigit).take(6) }, Modifier.fillMaxWidth(),
+                                singleLine = true, label = { Text(t("Код сопряжения (6 цифр)", "Pairing code (6 digits)")) })
+                            OutlinedTextField(wifiConnectPort, { wifiConnectPort = it.filter(Char::isDigit).take(5) }, Modifier.fillMaxWidth(),
+                                singleLine = true, label = { Text(t("Порт беспроводной отладки", "Wireless debugging port")) })
+                            Button(
+                                onClick = {
+                                    connectWifi(wifiHost, wifiPairPort, wifiPairCode, wifiConnectPort)
+                                    wifiPairCode = ""
+                                },
+                                enabled = !busy && wifiHost.isNotBlank() && wifiPairPort.isNotBlank() &&
+                                    wifiPairCode.length == 6 && wifiConnectPort.isNotBlank()
+                            ) { Text(t("Сопрячь и прочитать по Wi-Fi", "Pair and read over Wi-Fi")) }
+                            if (wifiStatus != WifiAdbState.IDLE) {
+                                val statusText = when (wifiStatus) {
+                                    WifiAdbState.CONNECTING -> t("Сопряжение и подключение по Wi-Fi ADB…", "Pairing and connecting over Wi-Fi ADB…")
+                                    WifiAdbState.CONNECTED -> t("Wi-Fi ADB подключён; данные телефона прочитаны.", "Wi-Fi ADB connected; phone data read.")
+                                    WifiAdbState.ERROR -> t("Не удалось подключиться. Проверьте IP, порты, код и сеть.", "Connection failed. Check the IP, ports, code, and network.") +
+                                        wifiError?.let { "\n$it" }.orEmpty()
+                                    WifiAdbState.IDLE -> ""
+                                }
+                                Info("Wi-Fi ADB", statusText)
+                            }
                         }
                         2 -> {
                             if (current != null) Info(t("Данные подключённого телефона", "Connected phone"), cscSummary)
+                            val report = current
+                            val supported = report?.supportedCscs.orEmpty()
+                            val supportNote = when (report?.supportedCscSource) {
+                                CscListSource.FIRMWARE -> t("Список считан из прошивки через ADB.", "List read from this firmware over ADB.")
+                                CscListSource.PUBLIC_REFERENCE -> t(
+                                    "Справочный список для ${report?.multiCsc?.code}; состав может отличаться в этой прошивке.",
+                                    "Public reference list for ${report?.multiCsc?.code}; this firmware may differ."
+                                )
+                                else -> t("Multi-CSC не распознан, список недоступен.", "Multi-CSC not recognized; list unavailable.")
+                            }
+                            val supportTitle = if (report?.supportedCscSource == CscListSource.PUBLIC_REFERENCE)
+                                t("CSC в мультирегионе (справочно)", "Multi-CSC reference")
+                            else t("CSC в прошивке", "CSC bundle on device")
+                            Info(
+                                supportTitle,
+                                if (supported.isEmpty()) supportNote
+                                else supportNote + "\n" + supported.joinToString(" · ")
+                            )
                             OutlinedTextField(query, { query = it.take(32) }, Modifier.fillMaxWidth(),
                                 singleLine = true, label = { Text(t("Поиск CSC", "Search CSC")) })
                             val filtered = cscCodes.filter { it.contains(query.trim(), ignoreCase = true) }
@@ -285,9 +479,22 @@ class MainActivity : ComponentActivity() {
                             val assessment = when {
                                 active?.code == selected -> t("Уже указан как активный CSC.", "Already reported as the active CSC.")
                                 current == null -> t("Подключите телефон и прочитайте свойства через USB ADB.", "Connect the phone and read its properties over USB ADB.")
+                                reportIsWifi -> t("Список прочитан по Wi-Fi. Для смены CSC подключите телефон по USB.", "List read over Wi-Fi. Connect the phone by USB to change CSC.")
+                                selected in supported && report?.supportedCscSource == CscListSource.FIRMWARE -> t("Код найден в списке этой прошивки.", "Code found in this firmware's list.")
+                                selected in supported && report?.supportedCscSource == CscListSource.PUBLIC_REFERENCE -> t("Код есть в справочнике ${report?.multiCsc?.code}; наличие именно в этой сборке не проверено.", "Code is in the ${report?.multiCsc?.code} reference; this exact build is not verified.")
                                 else -> t("Совместимость с этой прошивкой не подтверждена.", "Compatibility with this firmware is unverified.")
                             }
                             Info(t("Выбранный CSC", "Selected CSC"), "$selectedLabel\n$assessment")
+                            Button(
+                                onClick = { confirmCscChange = true },
+                                enabled = !busy && !reportIsWifi && selectedUsbDevice != null && selected in supported && active?.code != selected
+                            ) {
+                                Text(t("Сменить CSC на $selected и перезагрузить", "Change CSC to $selected and reboot"))
+                            }
+                            cscChangeReport?.let { result ->
+                                Info(t("Результат смены CSC", "CSC change result"),
+                                    result.note + (result.response?.let { "\n$it" } ?: ""))
+                            }
                             filtered.chunked(3).forEach { row ->
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     row.forEach { code ->
@@ -299,6 +506,25 @@ class MainActivity : ComponentActivity() {
                         3 -> Info(t("Журнал сессии", "Session log"), log.asReversed().joinToString("\n") { (time, event) ->
                             "${DateFormat.getTimeInstance(DateFormat.MEDIUM).format(time)} · ${label(event)}"
                         }.ifEmpty { t("Событий пока нет.", "No events yet.") })
+                    }
+                    if (confirmCscChange) {
+                        AlertDialog(
+                            onDismissRequest = { confirmCscChange = false },
+                            title = { Text(t("Подтвердите смену CSC", "Confirm CSC change")) },
+                            text = { Text(t(
+                                "Для $selected будет отправлена последовательность Samsung AT-команд и запрошена перезагрузка. Метод неофициальный и не проверен на этой сборке. Возможны сброс настроек или проблемы с сетью и обновлениями. Сначала сделайте резервную копию.",
+                                "Samsung AT commands will set $selected and request a reboot. This unofficial method has not been verified on this firmware. Settings may reset, and network or update behavior may change. Back up your data first."
+                            )) },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    confirmCscChange = false
+                                    selectedUsbDevice?.let { requestCscChange(it, selected) }
+                                }) { Text(t("Продолжить", "Continue")) }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { confirmCscChange = false }) { Text(t("Отмена", "Cancel")) }
+                            }
+                        )
                     }
                 }
             }
