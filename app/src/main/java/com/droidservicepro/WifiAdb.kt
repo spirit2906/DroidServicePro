@@ -26,7 +26,7 @@ internal suspend fun readWifiDiagnostics(
     )
     AdbClient.pairTls(host, pairingPort, pairingCode, keyProvider).getOrElse { throw it }
 
-    AdbClient.connectTls(host, connectPort, keyProvider).use { adb ->
+    return AdbClient.connectTls(host, connectPort, keyProvider).use { adb ->
         val dump = adb.shell("getprop").stdoutText
         val propertyNames = listOf(
             "persist.sys.omc_path", "persist.sys.omc_etcpath", "persist.sys.omcnw_path",
@@ -74,11 +74,10 @@ internal suspend fun readWifiDiagnostics(
 private val cscListPaths = listOf(
     "/odm/etc/omc/sales_code_list.dat",
     "/system/odm/etc/omc/sales_code_list.dat",
-    "/prism/etc/sales_code_list.dat",
+    "/prism/etc/sales_code_list.data",
     "/product/omc/sales_code_list.dat",
     "/optics/configs/carriers/sales_code_list.dat",
-    "/system/omc/sales_code_list.dat"
-)
+    "/system/omc/sales_code_list.dat")
 
 private fun parseWifiCscList(raw: String): List<String> = raw.lineSequence()
     .map { it.trim().removePrefix("single/").removePrefix("multi/") }
