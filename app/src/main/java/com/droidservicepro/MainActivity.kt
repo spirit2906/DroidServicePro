@@ -417,11 +417,11 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             Info("Wi-Fi ADB", t(
-                                "На S23 включите «Беспроводная отладка» и оставьте оба телефона в одной Wi-Fi сети. Откройте «Сопряжение устройства с помощью кода»: введите IP, порт сопряжения и код. Порт подключения возьмите с основного экрана «Беспроводная отладка». После сопряжения приложение читает свойства и CSC через защищённый ADB.",
-                                "On the S23, enable Wireless debugging and keep both phones on the same Wi-Fi network. Open Pair device with pairing code and enter its IP, pairing port, and code. Get the connect port from the main Wireless debugging screen. After pairing, the app reads properties and CSC over secure ADB."
+                                "На подключаемом телефоне Samsung включите «Беспроводная отладка» и оставьте оба телефона в одной Wi-Fi сети. Откройте «Сопряжение устройства с помощью кода»: введите IP, порт сопряжения и код. Порт подключения возьмите с основного экрана «Беспроводная отладка». После сопряжения приложение читает свойства и CSC через защищённый ADB.",
+                                "On the Samsung phone you want to connect, enable Wireless debugging and keep both phones on the same Wi-Fi network. Open Pair device with pairing code and enter its IP, pairing port, and code. Get the connect port from the main Wireless debugging screen. After pairing, the app reads properties and CSC over secure ADB."
                             ))
                             OutlinedTextField(wifiHost, { wifiHost = it.take(80) }, Modifier.fillMaxWidth(),
-                                singleLine = true, label = { Text(t("IP S23 Ultra", "S23 Ultra IP address")) })
+                                singleLine = true, label = { Text(t("IP телефона Samsung", "Samsung phone IP address")) })
                             OutlinedTextField(wifiPairPort, { wifiPairPort = it.filter(Char::isDigit).take(5) }, Modifier.fillMaxWidth(),
                                 singleLine = true, label = { Text(t("Порт сопряжения", "Pairing port")) })
                             OutlinedTextField(wifiPairCode, { wifiPairCode = it.filter(Char::isDigit).take(6) }, Modifier.fillMaxWidth(),
