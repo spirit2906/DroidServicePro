@@ -13,8 +13,8 @@ android {
         applicationId = "com.droidservicepro"
         minSdk = 26
         targetSdk = 35
-        versionCode = 9
-        versionName = "0.2.7"
+        versionCode = 10
+        versionName = "0.2.8"
     }
 
     buildFeatures { compose = true }
@@ -33,6 +33,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-core")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+    implementation("io.github.rhythmcache:adb-kt:1.0.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
 

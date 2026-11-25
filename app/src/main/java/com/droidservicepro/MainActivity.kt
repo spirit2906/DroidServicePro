@@ -35,6 +35,8 @@ private val Panel = Color(0xFF151E2B)
 private val Accent = Color(0xFF55A7FF)
 private const val USB_PERMISSION = "com.droidservicepro.USB_PERMISSION"
 
+private enum class WifiAdbState { IDLE, CONNECTING, CONNECTED, ERROR }
+
 private enum class Status(val ru: String, val en: String) {
     READY("Подключите телефон с включённой отладкой по USB.", "Connect a phone with USB debugging enabled."),
     PERMISSION("Разрешите приложению доступ к USB на телефоне-хосте.", "Allow USB access on the host phone."),
@@ -66,6 +68,9 @@ class MainActivity : ComponentActivity() {
     private var modemReport by mutableStateOf<UsbModemReport?>(null)
     private var pendingCsc: String? = null
     private var cscChangeReport by mutableStateOf<UsbCscChangeReport?>(null)
+    private var reportIsWifi by mutableStateOf(false)
+    private var wifiStatus by mutableStateOf(WifiAdbState.IDLE)
+    private var wifiError by mutableStateOf<String?>(null)
 
     private val usbEvents = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -139,6 +144,7 @@ class MainActivity : ComponentActivity() {
         pendingCsc = null
         if (busy || pendingDevice != null) return
         report = null
+        reportIsWifi = false
         currentDevice = device.deviceName
         if (usb.hasPermission(device)) {
             diagnose(device)
@@ -234,6 +240,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun diagnose(device: UsbDevice) {
+        reportIsWifi = false
         busy = true
         recordStatus(Status.CONNECTING)
         lifecycleScope.launch {
@@ -264,6 +271,41 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun connectWifi(host: String, pairingPortText: String, code: String, connectPortText: String) {
+        if (busy) return
+        val pairingPort = pairingPortText.toIntOrNull()
+        val connectPort = connectPortText.toIntOrNull()
+        if (pairingPort == null || connectPort == null) {
+            wifiStatus = WifiAdbState.ERROR
+            wifiError = "Enter both ports shown by Wireless debugging."
+            return
+        }
+        busy = true
+        wifiStatus = WifiAdbState.CONNECTING
+        wifiError = null
+        lifecycleScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    readWifiDiagnostics(applicationContext, host.trim(), pairingPort, code.trim(), connectPort)
+                }
+                if (!isDestroyed) {
+                    report = result
+                    reportIsWifi = true
+                    currentDevice = null
+                    wifiStatus = WifiAdbState.CONNECTED
+                    cscChangeReport = null
+                }
+            } catch (error: Exception) {
+                if (!isDestroyed) {
+                    wifiStatus = WifiAdbState.ERROR
+                    wifiError = error.message?.take(180)
+                }
+            } finally {
+                busy = false
+            }
+        }
+    }
+
     @Composable
     private fun App(ru: Boolean, toggleLanguage: () -> Unit) {
         fun t(a: String, b: String) = if (ru) a else b
@@ -271,6 +313,10 @@ class MainActivity : ComponentActivity() {
         var page by rememberSaveable { mutableIntStateOf(0) }
         var selected by rememberSaveable { mutableStateOf("EUX") }
         var query by rememberSaveable { mutableStateOf("") }
+        var wifiHost by rememberSaveable { mutableStateOf("") }
+        var wifiPairPort by rememberSaveable { mutableStateOf("") }
+        var wifiPairCode by remember { mutableStateOf("") }
+        var wifiConnectPort by rememberSaveable { mutableStateOf("") }
         var confirmCscChange by remember { mutableStateOf(false) }
         val pages = listOf(t("Главная", "Home"), t("Телефон", "Device"), "CSC", t("Журнал", "Log"))
         val icons = listOf(Icons.Default.Home, Icons.Default.Phone, Icons.Default.Place, Icons.Default.List)
@@ -309,7 +355,7 @@ class MainActivity : ComponentActivity() {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Column(Modifier.weight(1f)) {
                             Text("DroidService Pro", style = MaterialTheme.typography.headlineSmall)
-                            Text("v0.2.6")
+                            Text("v0.2.8")
                         }
                         TextButton(onClick = toggleLanguage) { Text(t("EN", "RU")) }
                     }
@@ -351,6 +397,7 @@ class MainActivity : ComponentActivity() {
                                     t("Сборка", "Build") to current.build,
                                     t("Модем", "Baseband") to current.baseband
                                 ).joinToString("\n") { (key, value) -> "$key: ${value ?: unknown}" })
+                                if (reportIsWifi) Info("Wi-Fi ADB", t("Данные прочитаны по беспроводной отладке.", "Data read over Wireless debugging."))
                                 Info("CSC", cscSummary)
                                 OutlinedButton(onClick = { showCscProperties = !showCscProperties }) {
                                     Text(if (showCscProperties) t("Скрыть свойства CSC", "Hide CSC properties")
@@ -369,9 +416,35 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             Info("Wi-Fi ADB", t(
-                                "На телефоне включите «Беспроводная отладка» → «Сопряжение устройства с помощью кода». На компьютере в той же сети выполните adb pair IP:порт_сопряжения и введите код с телефона.\n\nПри необходимости выполните adb connect IP:порт_отладки. Диагностика в приложении доступна по USB.",
-                                "On the target, open Wireless debugging → Pair device with pairing code. On a computer on the same network, run adb pair IP:pairing_port and enter the code shown on the phone.\n\nIf needed, run adb connect IP:debugging_port. This app runs diagnostics over USB."
+                                "На S23 включите «Беспроводная отладка» и оставьте оба телефона в одной Wi-Fi сети. Откройте «Сопряжение устройства с помощью кода»: введите IP, порт сопряжения и код. Порт подключения возьмите с основного экрана «Беспроводная отладка». После сопряжения приложение читает свойства и CSC через защищённый ADB.",
+                                "On the S23, enable Wireless debugging and keep both phones on the same Wi-Fi network. Open Pair device with pairing code and enter its IP, pairing port, and code. Get the connect port from the main Wireless debugging screen. After pairing, the app reads properties and CSC over secure ADB."
                             ))
+                            OutlinedTextField(wifiHost, { wifiHost = it.take(80) }, Modifier.fillMaxWidth(),
+                                singleLine = true, label = { Text(t("IP S23 Ultra", "S23 Ultra IP address")) })
+                            OutlinedTextField(wifiPairPort, { wifiPairPort = it.filter(Char::isDigit).take(5) }, Modifier.fillMaxWidth(),
+                                singleLine = true, label = { Text(t("Порт сопряжения", "Pairing port")) })
+                            OutlinedTextField(wifiPairCode, { wifiPairCode = it.filter(Char::isDigit).take(6) }, Modifier.fillMaxWidth(),
+                                singleLine = true, label = { Text(t("Код сопряжения (6 цифр)", "Pairing code (6 digits)")) })
+                            OutlinedTextField(wifiConnectPort, { wifiConnectPort = it.filter(Char::isDigit).take(5) }, Modifier.fillMaxWidth(),
+                                singleLine = true, label = { Text(t("Порт беспроводной отладки", "Wireless debugging port")) })
+                            Button(
+                                onClick = {
+                                    connectWifi(wifiHost, wifiPairPort, wifiPairCode, wifiConnectPort)
+                                    wifiPairCode = ""
+                                },
+                                enabled = !busy && wifiHost.isNotBlank() && wifiPairPort.isNotBlank() &&
+                                    wifiPairCode.length == 6 && wifiConnectPort.isNotBlank()
+                            ) { Text(t("Сопрячь и прочитать по Wi-Fi", "Pair and read over Wi-Fi")) }
+                            if (wifiStatus != WifiAdbState.IDLE) {
+                                val statusText = when (wifiStatus) {
+                                    WifiAdbState.CONNECTING -> t("Сопряжение и подключение по Wi-Fi ADB…", "Pairing and connecting over Wi-Fi ADB…")
+                                    WifiAdbState.CONNECTED -> t("Wi-Fi ADB подключён; данные телефона прочитаны.", "Wi-Fi ADB connected; phone data read.")
+                                    WifiAdbState.ERROR -> t("Не удалось подключиться. Проверьте IP, порты, код и сеть.", "Connection failed. Check the IP, ports, code, and network.") +
+                                        if (ru) "" else wifiError?.let { "\n$it" }.orEmpty()
+                                    WifiAdbState.IDLE -> ""
+                                }
+                                Info("Wi-Fi ADB", statusText)
+                            }
                         }
                         2 -> {
                             if (current != null) Info(t("Данные подключённого телефона", "Connected phone"), cscSummary)
@@ -405,6 +478,7 @@ class MainActivity : ComponentActivity() {
                             val assessment = when {
                                 active?.code == selected -> t("Уже указан как активный CSC.", "Already reported as the active CSC.")
                                 current == null -> t("Подключите телефон и прочитайте свойства через USB ADB.", "Connect the phone and read its properties over USB ADB.")
+                                reportIsWifi -> t("Список прочитан по Wi-Fi. Для смены CSC подключите телефон по USB.", "List read over Wi-Fi. Connect the phone by USB to change CSC.")
                                 selected in supported && report?.supportedCscSource == CscListSource.FIRMWARE -> t("Код найден в списке этой прошивки.", "Code found in this firmware's list.")
                                 selected in supported && report?.supportedCscSource == CscListSource.PUBLIC_REFERENCE -> t("Код есть в справочнике ${report?.multiCsc?.code}; наличие именно в этой сборке не проверено.", "Code is in the ${report?.multiCsc?.code} reference; this exact build is not verified.")
                                 else -> t("Совместимость с этой прошивкой не подтверждена.", "Compatibility with this firmware is unverified.")
@@ -412,7 +486,7 @@ class MainActivity : ComponentActivity() {
                             Info(t("Выбранный CSC", "Selected CSC"), "$selectedLabel\n$assessment")
                             Button(
                                 onClick = { confirmCscChange = true },
-                                enabled = !busy && selectedUsbDevice != null && selected in supported && active?.code != selected
+                                enabled = !busy && !reportIsWifi && selectedUsbDevice != null && selected in supported && active?.code != selected
                             ) {
                                 Text(t("Сменить CSC на $selected и перезагрузить", "Change CSC to $selected and reboot"))
                             }
