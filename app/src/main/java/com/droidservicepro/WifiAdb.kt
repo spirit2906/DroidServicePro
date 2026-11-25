@@ -45,9 +45,18 @@ internal suspend fun readWifiDiagnostics(
             throw IllegalStateException("The phone connected but returned no Android properties.")
         }
 
-        val supported = cscListPaths.asSequence().mapNotNull { path ->
-            runCatching { parseWifiCscList(adb.shell("cat $path").stdoutText) }.getOrNull()
-        }.firstOrNull { it.isNotEmpty() }.orEmpty()
+        var supported = emptyList<String>()
+        for (path in cscListPaths) {
+            val parsed = try {
+                parseWifiCscList(adb.shell("cat $path").stdoutText)
+            } catch (_: Exception) {
+                emptyList()
+            }
+            if (parsed.isNotEmpty()) {
+                supported = parsed
+                break
+            }
+        }
         if (supported.isNotEmpty()) {
             return@use report.copy(supportedCscs = supported, supportedCscSource = CscListSource.FIRMWARE)
         }
