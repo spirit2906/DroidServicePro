@@ -135,6 +135,7 @@ class MainActivity : ComponentActivity() {
             currentDevice = null
             pendingDevice = null
             report = null
+            reportIsWifi = false
             recordStatus(Status.DETACHED)
         }
     }
@@ -440,7 +441,7 @@ class MainActivity : ComponentActivity() {
                                     WifiAdbState.CONNECTING -> t("Сопряжение и подключение по Wi-Fi ADB…", "Pairing and connecting over Wi-Fi ADB…")
                                     WifiAdbState.CONNECTED -> t("Wi-Fi ADB подключён; данные телефона прочитаны.", "Wi-Fi ADB connected; phone data read.")
                                     WifiAdbState.ERROR -> t("Не удалось подключиться. Проверьте IP, порты, код и сеть.", "Connection failed. Check the IP, ports, code, and network.") +
-                                        if (ru) "" else wifiError?.let { "\n$it" }.orEmpty()
+                                        wifiError?.let { "\n$it" }.orEmpty()
                                     WifiAdbState.IDLE -> ""
                                 }
                                 Info("Wi-Fi ADB", statusText)

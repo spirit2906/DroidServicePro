@@ -35,5 +35,4 @@ internal object MultiCscCatalog {
     fun codesFor(multiCsc: String?): List<String> =
         entries[multiCsc?.uppercase()]?.sorted().orEmpty()
 
-    fun hasGroup(multiCsc: String?): Boolean = !codesFor(multiCsc).isEmpty()
 }
