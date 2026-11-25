@@ -33,7 +33,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-core")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
-    implementation("io.github.rhythmcache:adb-kt:1.0.0")
+    implementation("com.github.rhythmcache:adb-kt:1.0.13")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
 
